@@ -83,8 +83,16 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     return True
 
 class CustomDataUpdateCoordinator(DataUpdateCoordinator):
-    def __init__(self, hass, name, update_interval):
-        super().__init__(hass, _LOGGER, name=name, update_interval=update_interval)
+    def __init__(self,
+        hass: HomeAssistant,
+        logger: logging.Logger,
+        *,
+        config_entry: config_entries.ConfigEntry | None | UndefinedType = UNDEFINED,
+        name: str,
+        update_interval: timedelta | None = None,
+        update_method
+    ) -> None:
+        super().__init__(hass, _LOGGER, name=name, update_interval=update_interval, update_method=update_method)
         self.listener_count = 0
 
     def async_add_listener(self, update_callback):
