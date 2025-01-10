@@ -28,7 +28,7 @@ import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import DOMAIN, ENABLE_1D, ENABLE_1M, ENABLE_1MON, VUE_DATA
+from .const import DOMAIN, ENABLE_1D, ENABLE_1M, ENABLE_LIVE, ENABLE_1MON, VUE_DATA
 
 CONFIG_SCHEMA = vol.Schema(
     {
@@ -36,6 +36,7 @@ CONFIG_SCHEMA = vol.Schema(
             {
                 vol.Required(CONF_EMAIL): cv.string,
                 vol.Required(CONF_PASSWORD): cv.string,
+                vol.Optional(ENABLE_LIVE, default=False): cv.boolean,
                 vol.Optional(ENABLE_1M, default=True): cv.boolean,
                 vol.Optional(ENABLE_1D, default=True): cv.boolean,
                 vol.Optional(ENABLE_1MON, default=True): cv.boolean,
@@ -52,6 +53,7 @@ PLATFORMS = ["sensor", "switch"]
 DEVICE_GIDS: list[str] = []
 DEVICE_INFORMATION: dict[int, VueDevice] = {}
 DEVICES_ONLINE: list[str] = []
+LAST_SECOND_DATA: dict[str, Any] = {}
 LAST_MINUTE_DATA: dict[str, Any] = {}
 LAST_DAY_DATA: dict[str, Any] = {}
 LAST_DAY_UPDATE: datetime | None = None
@@ -71,6 +73,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             data={
                 CONF_EMAIL: conf[CONF_EMAIL],
                 CONF_PASSWORD: conf[CONF_PASSWORD],
+                ENABLE_LIVE: conf[ENABLE_LIVE],
                 ENABLE_1M: conf[ENABLE_1M],
                 ENABLE_1D: conf[ENABLE_1D],
                 ENABLE_1MON: conf[ENABLE_1MON],
@@ -78,6 +81,25 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         )
     )
     return True
+
+class CustomDataUpdateCoordinator(DataUpdateCoordinator):
+    def __init__(self, hass, name, update_interval):
+        super().__init__(hass, _LOGGER, name=name, update_interval=update_interval)
+        self.listener_count = 0
+
+    def async_add_listener(self, update_callback):
+        """Add a listener and track listener count."""
+        super().async_add_listener(update_callback)
+        self.listener_count += 1
+        _LOGGER.info(f"Listener added. Total listeners: {self.listener_count}")
+        # self._adjust_update_interval()
+
+    def async_remove_listener(self, update_callback):
+        """Remove a listener and track listener count."""
+        super().async_remove_listener(update_callback)
+        self.listener_count -= 1
+        _LOGGER.info(f"Listener removed. Total listeners: {self.listener_count}")
+        # self._adjust_update_interval()
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -103,6 +125,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         return False
 
     try:
+        # Each Emporia unit is called a "Device" and each circuit is called a "Channel"
+
         devices = await loop.run_in_executor(None, vue.get_devices)
         for device in devices:
             if str(device.device_gid) not in DEVICE_GIDS:
@@ -121,6 +145,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             len(DEVICE_INFORMATION.keys()),
             total_channels,
         )
+
+        async def async_update_data_live():
+            """Fetch data from API endpoint at live interval.
+
+            It is not intended to run this continuously but only when the UI is 
+            being actively queried
+
+            This is the place to pre-process the data to lookup tables
+            so entities can quickly look up their data.
+            """
+            return await update_sensors(vue, [Scale.LIVE.value])
 
         async def async_update_data_1min():
             """Fetch data from API endpoint at a 1 minute interval.
@@ -176,9 +211,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                             ]  # already in kwh
             return LAST_DAY_DATA
 
+        # coordinator_live = None
+        # if ENABLE_LIVE not in entry_data or entry_data[ENABLE_LIVE]:
+        #     coordinator_live = DataUpdateCoordinator(
+        #         hass,
+        #         _LOGGER,
+        #         # Name of the data. For logging purposes.
+        #         name="sensor",
+        #         update_method=async_update_data_live,
+        #         # Polling interval. Will only be polled if there are subscribers.
+        #         update_interval=timedelta(seconds=2),
+        #         always_update=False,
+        #     )
+        #     await coordinator_live.async_config_entry_first_refresh()
+        #     _LOGGER.info("live update data: %s", coordinator_live.data)
+
         coordinator_1min = None
         if ENABLE_1M not in entry_data or entry_data[ENABLE_1M]:
-            coordinator_1min = DataUpdateCoordinator(
+            coordinator_1min = CustomDataUpdateCoordinator(
                 hass,
                 _LOGGER,
                 # Name of the data. For logging purposes.
@@ -327,6 +377,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data[DOMAIN][entry.entry_id] = {
         VUE_DATA: vue,
+        "coordinator_live": coordinator_live,
         "coordinator_1min": coordinator_1min,
         "coordinator_1mon": coordinator_1mon,
         "coordinator_day_sensor": coordinator_day_sensor,
