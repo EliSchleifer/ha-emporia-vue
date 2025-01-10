@@ -1,6 +1,6 @@
-# emporia_vue Home Assistant Integration
+# Emporia Vue Home Assistant Integration
 
-Reads data from the Emporia Vue energy monitor. Creates a sensor for each device channel showing average usage over each minute.
+Reads data from the Emporia Vue energy monitor.  Automatically create devices for each channel and sensors for monthly, daily, and per-minute utilization.
 
 Note: This project is not associated with or endorsed by Emporia Energy.
 
